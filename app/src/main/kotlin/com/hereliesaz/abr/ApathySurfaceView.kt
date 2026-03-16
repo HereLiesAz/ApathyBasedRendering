@@ -1,6 +1,10 @@
 package com.hereliesaz.abr
 
 import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.opengl.GLSurfaceView
 import android.os.SystemClock
 import android.util.AttributeSet
@@ -10,13 +14,16 @@ import kotlin.math.hypot
 class ApathySurfaceView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
-) : GLSurfaceView(context, attrs) {
+) : GLSurfaceView(context, attrs), SensorEventListener {
 
     private lateinit var renderer: ApathyRenderer
 
     private var lastX = 0f
     private var lastY = 0f
     private var lastTime = 0L
+
+    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    private val gravitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
 
     init {
         setEGLContextClientVersion(3)
@@ -40,7 +47,6 @@ class ApathySurfaceView @JvmOverloads constructor(
                 lastTime = currentTime
                 
                 queueEvent {
-                    // Initial contact. Maximum trauma.
                     renderer.setTouchData(u, v, 1.0f)
                     renderer.setTouchState(true)
                 }
@@ -52,11 +58,7 @@ class ApathySurfaceView @JvmOverloads constructor(
                 val dy = event.y - lastY
                 val distance = hypot(dx.toDouble(), dy.toDouble()).toFloat()
 
-                // Velocity in pixels per millisecond.
                 val velocity = distance / dt
-
-                // The faster you run, the less of a mark you leave.
-                // Map a speed of 5.0+ px/ms to near 0 opacity, and 0.0 px/ms to 1.0 opacity.
                 val normalizedVelocity = (velocity / 5.0f).coerceIn(0.01f, 1.0f)
                 val opacity = 1.0f - normalizedVelocity
 
@@ -80,11 +82,31 @@ class ApathySurfaceView @JvmOverloads constructor(
         return super.onTouchEvent(event)
     }
 
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type == Sensor.TYPE_GRAVITY) {
+            // X and Y physical forces. We ignore Z because the void is flat.
+            val gx = event.values[0]
+            val gy = event.values[1]
+            
+            queueEvent {
+                renderer.setGravity(gx, gy)
+            }
+        }
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+        // We do not care about accuracy. Apathy is imprecise by nature.
+    }
+
     override fun onPause() {
         super.onPause()
+        sensorManager.unregisterListener(this)
     }
 
     override fun onResume() {
         super.onResume()
+        gravitySensor?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+        }
     }
 }
