@@ -1,13 +1,22 @@
 package com.hereliesaz.abr
 
+import android.content.Context
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import android.os.SystemClock
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
-class ApathyRenderer : GLSurfaceView.Renderer {
+class ApathyRenderer(
+    private val context: Context,
+    private val baseResId: Int,
+    private val noiseResId: Int,
+    private val stencilResId: Int
+) : GLSurfaceView.Renderer {
 
     private var shaderProgram: Int = 0
     private var timeUniformLocation: Int = 0
@@ -24,10 +33,28 @@ class ApathyRenderer : GLSurfaceView.Renderer {
     private var noiseTextureHandle: Int = 0
     private var stencilMaskHandle: Int = 0
 
-    // Abstract placeholders for reality. You'll need to generate these via GLUtils.texImage2D.
-    private var baseTextureId: Int = 1
-    private var noiseTextureId: Int = 2
-    private var stencilTextureId: Int = 3
+    private var baseTextureId: Int = 0
+    private var noiseTextureId: Int = 0
+    private var stencilTextureId: Int = 0
+
+    private val vaoHandle = IntArray(1)
+    private val vboHandle = IntArray(1)
+
+    // The wall. A flat plane of existence for the paint to suffer on.
+    // X, Y, Z, U, V
+    private val geometryData = floatArrayOf(
+        -1.0f,  1.0f, 0.0f,   0.0f, 0.0f, // Top left
+        -1.0f, -1.0f, 0.0f,   0.0f, 1.0f, // Bottom left
+         1.0f,  1.0f, 0.0f,   1.0f, 0.0f, // Top right
+         1.0f, -1.0f, 0.0f,   1.0f, 1.0f  // Bottom right
+    )
+
+    private val vertexBuffer: FloatBuffer = ByteBuffer
+        .allocateDirect(geometryData.size * 4)
+        .order(ByteOrder.nativeOrder())
+        .asFloatBuffer()
+        .put(geometryData)
+        .apply { position(0) }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES30.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
@@ -47,6 +74,29 @@ class ApathyRenderer : GLSurfaceView.Renderer {
         baseTextureHandle = GLES30.glGetUniformLocation(shaderProgram, "uBaseTexture")
         noiseTextureHandle = GLES30.glGetUniformLocation(shaderProgram, "uNoiseTexture")
         stencilMaskHandle = GLES30.glGetUniformLocation(shaderProgram, "uStencilMask")
+
+        // Pull the tragedy from the resources into the GPU.
+        baseTextureId = TextureLoader.load(context, baseResId)
+        noiseTextureId = TextureLoader.load(context, noiseResId)
+        stencilTextureId = TextureLoader.load(context, stencilResId)
+
+        // Manifest the physical limits of the canvas.
+        GLES30.glGenVertexArrays(1, vaoHandle, 0)
+        GLES30.glGenBuffers(1, vboHandle, 0)
+
+        GLES30.glBindVertexArray(vaoHandle[0])
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vboHandle[0])
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, geometryData.size * 4, vertexBuffer, GLES30.GL_STATIC_DRAW)
+
+        // Position Attribute (Location 0, 3 floats)
+        GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, 5 * 4, 0)
+        GLES30.glEnableVertexAttribArray(0)
+
+        // UV Attribute (Location 1, 2 floats)
+        GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, 5 * 4, 3 * 4)
+        GLES30.glEnableVertexAttribArray(1)
+
+        GLES30.glBindVertexArray(0)
 
         startTime = SystemClock.uptimeMillis()
     }
@@ -89,7 +139,10 @@ class ApathyRenderer : GLSurfaceView.Renderer {
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stencilTextureId)
         GLES30.glUniform1i(stencilMaskHandle, 2)
 
-        // TODO: Bind VBOs and execute glDrawArrays to manifest the geometry.
+        // Execute the brutalist geometry.
+        GLES30.glBindVertexArray(vaoHandle[0])
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+        GLES30.glBindVertexArray(0)
     }
 
     private fun createProgram(vertexSource: String, fragmentSource: String): Int {
