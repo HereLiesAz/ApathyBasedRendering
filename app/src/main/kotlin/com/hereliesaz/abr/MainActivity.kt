@@ -1,40 +1,24 @@
 package com.hereliesaz.abr
 
 import android.os.Bundle
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var apathySurface: ApathySurfaceView
+class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Hide the action bar. Pretense is a distraction.
-        supportActionBar?.hide()
-        
-        setContentView(R.layout.activity_main)
-
-        apathySurface = findViewById(R.id.apathy_surface)
-
-        // You must supply your own trauma.
-        // Replace R.drawable.* with the actual physical manifestations of the joke.
-        apathySurface.manifest(
-            baseResId = R.drawable.base_reality, // The wall
-            noiseResId = R.drawable.drip_noise,  // The chaos
-            stencilResId = R.drawable.the_joke   // The punchline
-        )
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // Resume the inevitable march of time.
-        apathySurface.onResume()
-    }
-
-    override fun onPause() {
-        super.onPause()
-        // Suspend the decay.
-        apathySurface.onPause()
+        // The void requires no action bar, no themes, no pretense.
+        setContent {
+            ApathyScreen(
+                baseResId = R.drawable.base_reality,
+                noiseResId = R.drawable.drip_noise,
+                stencilResId = R.drawable.the_joke,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     }
 }
