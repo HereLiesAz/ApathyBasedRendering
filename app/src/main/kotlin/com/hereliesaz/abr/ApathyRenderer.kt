@@ -32,6 +32,7 @@ class ApathyRenderer(
     private var baseTextureHandle: Int = 0
     private var noiseTextureHandle: Int = 0
     private var stencilMaskHandle: Int = 0
+    private var touchUVHandle: Int = 0
 
     private var baseTextureId: Int = 0
     private var noiseTextureId: Int = 0
@@ -39,6 +40,10 @@ class ApathyRenderer(
 
     private val vaoHandle = IntArray(1)
     private val vboHandle = IntArray(1)
+
+    // The locus of control. Defaults to the dead center of existence.
+    @Volatile private var touchU: Float = 0.5f
+    @Volatile private var touchV: Float = 0.5f
 
     // The wall. A flat plane of existence for the paint to suffer on.
     // X, Y, Z, U, V
@@ -55,6 +60,11 @@ class ApathyRenderer(
         .asFloatBuffer()
         .put(geometryData)
         .apply { position(0) }
+
+    fun setTouchUV(u: Float, v: Float) {
+        touchU = u
+        touchV = v
+    }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES30.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
@@ -74,6 +84,7 @@ class ApathyRenderer(
         baseTextureHandle = GLES30.glGetUniformLocation(shaderProgram, "uBaseTexture")
         noiseTextureHandle = GLES30.glGetUniformLocation(shaderProgram, "uNoiseTexture")
         stencilMaskHandle = GLES30.glGetUniformLocation(shaderProgram, "uStencilMask")
+        touchUVHandle = GLES30.glGetUniformLocation(shaderProgram, "uTouchUV")
 
         // Pull the tragedy from the resources into the GPU.
         baseTextureId = TextureLoader.load(context, baseResId)
@@ -115,6 +126,9 @@ class ApathyRenderer(
 
         val time = (SystemClock.uptimeMillis() - startTime) / 1000.0f
         GLES30.glUniform1f(timeUniformLocation, time)
+        
+        // Feed the human intervention into the shader.
+        GLES30.glUniform2f(touchUVHandle, touchU, touchV)
 
         // The camera stares into the void.
         Matrix.setLookAtM(viewMatrix, 0, 0f, 0f, 3f, 0f, 0f, 0f, 0f, 1.0f, 0.0f)
@@ -182,20 +196,36 @@ class ApathyRenderer(
             #version 300 es
             precision highp float;
             in vec2 vUV;
+            
             uniform sampler2D uBaseTexture;
             uniform sampler2D uNoiseTexture;
             uniform sampler2D uStencilMask;
             uniform float uTime;
+            uniform vec2 uTouchUV;
+            
             out vec4 FragColor;
+            
             void main() {
+                // The wall bleeds.
                 vec2 noiseUV = vUV * 5.0;
                 float noiseVal = texture(uNoiseTexture, noiseUV).r;
                 float dripFactor = noiseVal * (sin(uTime * 0.2) * 0.5 + 0.5) * 0.15;
                 vec2 distortedUV = vUV + vec2(0.0, -dripFactor);
-                float stencilVal = texture(uStencilMask, vUV).r;
+                
+                // Offset the stencil by the touch coordinates. 
+                // Scale by 3.0 to make it a decal rather than a full-screen inescapable truth.
+                vec2 stencilUV = (vUV - uTouchUV) * 3.0 + 0.5;
+                
+                // Hard clamp the bounds so the stencil doesn't tile into infinity.
+                float bounds = step(0.0, stencilUV.x) * step(stencilUV.x, 1.0) * step(0.0, stencilUV.y) * step(stencilUV.y, 1.0);
+                
+                float stencilVal = texture(uStencilMask, stencilUV).r * bounds;
                 float binaryCut = step(0.5, stencilVal); 
+                
                 vec4 rawColor = texture(uBaseTexture, distortedUV);
                 float luminance = dot(rawColor.rgb, vec3(0.299, 0.587, 0.114));
+                
+                // Multiply the void by the binary cut to slice out the stencil.
                 FragColor = vec4(vec3(luminance) * binaryCut, rawColor.a * binaryCut);
             }
         """.trimIndent()
