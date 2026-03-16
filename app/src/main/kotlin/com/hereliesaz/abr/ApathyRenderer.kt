@@ -1,8 +1,8 @@
-// ApathyRenderer.kt
 package com.hereliesaz.abr
 
 import android.opengl.GLES30
 import android.opengl.GLSurfaceView
+import android.opengl.Matrix
 import android.os.SystemClock
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
@@ -13,28 +13,49 @@ class ApathyRenderer : GLSurfaceView.Renderer {
     private var timeUniformLocation: Int = 0
     private var startTime: Long = 0
 
+    private val vPMatrix = FloatArray(16)
+    private val projectionMatrix = FloatArray(16)
+    private val viewMatrix = FloatArray(16)
+    private val modelMatrix = FloatArray(16)
+    private val mvpMatrix = FloatArray(16)
+
+    private var mvpMatrixHandle: Int = 0
+    private var baseTextureHandle: Int = 0
+    private var noiseTextureHandle: Int = 0
+    private var stencilMaskHandle: Int = 0
+
+    // Abstract placeholders for reality. You'll need to generate these via GLUtils.texImage2D.
+    private var baseTextureId: Int = 1
+    private var noiseTextureId: Int = 2
+    private var stencilTextureId: Int = 3
+
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        // The void.
         GLES30.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
 
-        // Brutalist culling. Discard what we don't need to look at.
         GLES30.glEnable(GLES30.GL_CULL_FACE)
         GLES30.glCullFace(GLES30.GL_BACK)
 
-        // Flatten the hierarchy. 
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glDepthFunc(GLES30.GL_LEQUAL)
         
-        // Disable soft blending. Sharp edges only.
         GLES30.glDisable(GLES30.GL_BLEND)
 
         shaderProgram = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
+        
         timeUniformLocation = GLES30.glGetUniformLocation(shaderProgram, "uTime")
+        mvpMatrixHandle = GLES30.glGetUniformLocation(shaderProgram, "uMVPMatrix")
+        baseTextureHandle = GLES30.glGetUniformLocation(shaderProgram, "uBaseTexture")
+        noiseTextureHandle = GLES30.glGetUniformLocation(shaderProgram, "uNoiseTexture")
+        stencilMaskHandle = GLES30.glGetUniformLocation(shaderProgram, "uStencilMask")
+
         startTime = SystemClock.uptimeMillis()
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         GLES30.glViewport(0, 0, width, height)
+        
+        val ratio: Float = width.toFloat() / height.toFloat()
+        Matrix.frustumM(projectionMatrix, 0, -ratio, ratio, -1f, 1f, 1f, 10f)
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -45,7 +66,30 @@ class ApathyRenderer : GLSurfaceView.Renderer {
         val time = (SystemClock.uptimeMillis() - startTime) / 1000.0f
         GLES30.glUniform1f(timeUniformLocation, time)
 
-        // TODO: Bind VBOs, active textures, and execute glDrawArrays to manifest the geometry.
+        // The camera stares into the void.
+        Matrix.setLookAtM(viewMatrix, 0, 0f, 0f, 3f, 0f, 0f, 0f, 0f, 1.0f, 0.0f)
+        Matrix.multiplyMM(vPMatrix, 0, projectionMatrix, 0, viewMatrix, 0)
+        
+        // The object exists, momentarily.
+        Matrix.setIdentityM(modelMatrix, 0)
+        Matrix.multiplyMM(mvpMatrix, 0, vPMatrix, 0, modelMatrix, 0)
+        
+        GLES30.glUniformMatrix4fv(mvpMatrixHandle, 1, false, mvpMatrix, 0)
+
+        // Bind the textures. Force the fragmented reality down the pipeline.
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, baseTextureId)
+        GLES30.glUniform1i(baseTextureHandle, 0)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, noiseTextureId)
+        GLES30.glUniform1i(noiseTextureHandle, 1)
+
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stencilTextureId)
+        GLES30.glUniform1i(stencilMaskHandle, 2)
+
+        // TODO: Bind VBOs and execute glDrawArrays to manifest the geometry.
     }
 
     private fun createProgram(vertexSource: String, fragmentSource: String): Int {
@@ -71,18 +115,16 @@ class ApathyRenderer : GLSurfaceView.Renderer {
             layout(location = 0) in vec4 aPosition;
             layout(location = 1) in vec2 aUV;
             
-            // Assuming standard MVP matrices exist in your inevitable geometry implementation
-            // uniform mat4 uMVPMatrix; 
+            uniform mat4 uMVPMatrix; 
             
             out vec2 vUV;
             
             void main() {
-                gl_Position = aPosition; // uMVPMatrix * aPosition;
+                gl_Position = uMVPMatrix * aPosition;
                 vUV = aUV;
             }
         """.trimIndent()
 
-        // Placeholder for the external file contents to ensure compilation in a single unit if needed
         private val FRAGMENT_SHADER = """
             #version 300 es
             precision highp float;
