@@ -14,7 +14,7 @@ import javax.microedition.khronos.opengles.GL10
 class ApathyRenderer(
     private val context: Context,
     private val baseResId: Int,
-    private val noiseResId: Int, // We accept this to appease the calling architecture, then violently ignore it.
+    private val noiseResId: Int,
     private val stencilResId: Int
 ) : GLSurfaceView.Renderer {
 
@@ -32,6 +32,7 @@ class ApathyRenderer(
     private var stampMvpHandle: Int = 0
     private var stampStencilHandle: Int = 0
     private var stampTouchUVHandle: Int = 0
+    private var stampOpacityHandle: Int = 0
 
     // Composite Uniforms
     private var compMvpHandle: Int = 0
@@ -54,6 +55,7 @@ class ApathyRenderer(
 
     @Volatile private var touchU: Float = 0.5f
     @Volatile private var touchV: Float = 0.5f
+    @Volatile private var touchOpacity: Float = 1.0f
     @Volatile private var isTouching: Boolean = false
 
     private val geometryData = floatArrayOf(
@@ -70,9 +72,10 @@ class ApathyRenderer(
         .put(geometryData)
         .apply { position(0) }
 
-    fun setTouchUV(u: Float, v: Float) {
+    fun setTouchData(u: Float, v: Float, opacity: Float) {
         touchU = u
         touchV = v
+        touchOpacity = opacity
     }
 
     fun setTouchState(state: Boolean) {
@@ -88,6 +91,7 @@ class ApathyRenderer(
         stampMvpHandle = GLES30.glGetUniformLocation(stampProgram, "uMVPMatrix")
         stampStencilHandle = GLES30.glGetUniformLocation(stampProgram, "uStencilMask")
         stampTouchUVHandle = GLES30.glGetUniformLocation(stampProgram, "uTouchUV")
+        stampOpacityHandle = GLES30.glGetUniformLocation(stampProgram, "uBrushOpacity")
 
         compositeProgram = createProgram(VERTEX_SHADER, COMPOSITE_FRAGMENT_SHADER)
         compMvpHandle = GLES30.glGetUniformLocation(compositeProgram, "uMVPMatrix")
@@ -98,8 +102,6 @@ class ApathyRenderer(
 
         baseTextureId = TextureLoader.load(context, baseResId)
         stencilTextureId = TextureLoader.load(context, stencilResId)
-        
-        // Sidestep the file system. Synthesize the agony in RAM.
         noiseTextureId = TextureGenerator.generateChaos()
 
         GLES30.glGenVertexArrays(1, vaoHandle, 0)
@@ -159,12 +161,14 @@ class ApathyRenderer(
         if (isTouching) {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboHandle[0])
             
+            // Additive blending. The slower you move, the faster the values hit 1.0
             GLES30.glEnable(GLES30.GL_BLEND)
             GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
 
             GLES30.glUseProgram(stampProgram)
             GLES30.glUniformMatrix4fv(stampMvpHandle, 1, false, mvpMatrix, 0)
             GLES30.glUniform2f(stampTouchUVHandle, touchU, touchV)
+            GLES30.glUniform1f(stampOpacityHandle, touchOpacity)
 
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stencilTextureId)
@@ -243,6 +247,7 @@ class ApathyRenderer(
             
             uniform sampler2D uStencilMask;
             uniform vec2 uTouchUV;
+            uniform float uBrushOpacity;
             out vec4 FragColor;
             
             void main() {
@@ -250,7 +255,8 @@ class ApathyRenderer(
                 float bounds = step(0.0, stencilUV.x) * step(stencilUV.x, 1.0) * step(0.0, stencilUV.y) * step(stencilUV.y, 1.0);
                 float stencilVal = texture(uStencilMask, stencilUV).r * bounds;
                 
-                FragColor = vec4(stencilVal);
+                // Opacity throttles the accumulation.
+                FragColor = vec4(stencilVal * uBrushOpacity);
             }
         """.trimIndent()
 
@@ -273,6 +279,8 @@ class ApathyRenderer(
                 vec2 distortedUV = vUV + vec2(0.0, -dripFactor);
                 
                 float accumulatedVal = texture(uAccumulationTexture, vUV).r;
+                
+                // The threshold. If you didn't press hard enough or slow enough, it doesn't manifest.
                 float binaryCut = step(0.5, accumulatedVal); 
                 
                 vec4 rawColor = texture(uBaseTexture, distortedUV);
