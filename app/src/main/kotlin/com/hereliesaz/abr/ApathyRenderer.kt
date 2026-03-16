@@ -18,8 +18,8 @@ class ApathyRenderer(
     private val stencilResId: Int
 ) : GLSurfaceView.Renderer {
 
-    private var shaderProgram: Int = 0
-    private var timeUniformLocation: Int = 0
+    private var stampProgram: Int = 0
+    private var compositeProgram: Int = 0
     private var startTime: Long = 0
 
     private val vPMatrix = FloatArray(16)
@@ -28,30 +28,39 @@ class ApathyRenderer(
     private val modelMatrix = FloatArray(16)
     private val mvpMatrix = FloatArray(16)
 
-    private var mvpMatrixHandle: Int = 0
-    private var baseTextureHandle: Int = 0
-    private var noiseTextureHandle: Int = 0
-    private var stencilMaskHandle: Int = 0
-    private var touchUVHandle: Int = 0
+    // Stamp Uniforms
+    private var stampMvpHandle: Int = 0
+    private var stampStencilHandle: Int = 0
+    private var stampTouchUVHandle: Int = 0
 
+    // Composite Uniforms
+    private var compMvpHandle: Int = 0
+    private var compTimeHandle: Int = 0
+    private var compBaseHandle: Int = 0
+    private var compNoiseHandle: Int = 0
+    private var compAccumHandle: Int = 0
+
+    // Textures
     private var baseTextureId: Int = 0
     private var noiseTextureId: Int = 0
     private var stencilTextureId: Int = 0
 
+    // FBO Memory
+    private val fboHandle = IntArray(1)
+    private val accumTextureHandle = IntArray(1)
+
     private val vaoHandle = IntArray(1)
     private val vboHandle = IntArray(1)
 
-    // The locus of control. Defaults to the dead center of existence.
     @Volatile private var touchU: Float = 0.5f
     @Volatile private var touchV: Float = 0.5f
+    @Volatile private var isTouching: Boolean = false
 
-    // The wall. A flat plane of existence for the paint to suffer on.
-    // X, Y, Z, U, V
     private val geometryData = floatArrayOf(
-        -1.0f,  1.0f, 0.0f,   0.0f, 0.0f, // Top left
-        -1.0f, -1.0f, 0.0f,   0.0f, 1.0f, // Bottom left
-         1.0f,  1.0f, 0.0f,   1.0f, 0.0f, // Top right
-         1.0f, -1.0f, 0.0f,   1.0f, 1.0f  // Bottom right
+        -1.0f,  1.0f, 0.0f,   0.0f, 0.0f,
+        -1.0f, -1.0f, 0.0f,   0.0f, 1.0f,
+         1.0f,  1.0f, 0.0f,   1.0f, 0.0f,
+         1.0f, -1.0f, 0.0f,   1.0f, 1.0f
     )
 
     private val vertexBuffer: FloatBuffer = ByteBuffer
@@ -66,32 +75,31 @@ class ApathyRenderer(
         touchV = v
     }
 
-    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        GLES30.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
+    fun setTouchState(state: Boolean) {
+        isTouching = state
+    }
 
+    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES30.glEnable(GLES30.GL_CULL_FACE)
         GLES30.glCullFace(GLES30.GL_BACK)
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
 
-        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
-        GLES30.glDepthFunc(GLES30.GL_LEQUAL)
-        
-        GLES30.glDisable(GLES30.GL_BLEND)
+        stampProgram = createProgram(VERTEX_SHADER, STAMP_FRAGMENT_SHADER)
+        stampMvpHandle = GLES30.glGetUniformLocation(stampProgram, "uMVPMatrix")
+        stampStencilHandle = GLES30.glGetUniformLocation(stampProgram, "uStencilMask")
+        stampTouchUVHandle = GLES30.glGetUniformLocation(stampProgram, "uTouchUV")
 
-        shaderProgram = createProgram(VERTEX_SHADER, FRAGMENT_SHADER)
-        
-        timeUniformLocation = GLES30.glGetUniformLocation(shaderProgram, "uTime")
-        mvpMatrixHandle = GLES30.glGetUniformLocation(shaderProgram, "uMVPMatrix")
-        baseTextureHandle = GLES30.glGetUniformLocation(shaderProgram, "uBaseTexture")
-        noiseTextureHandle = GLES30.glGetUniformLocation(shaderProgram, "uNoiseTexture")
-        stencilMaskHandle = GLES30.glGetUniformLocation(shaderProgram, "uStencilMask")
-        touchUVHandle = GLES30.glGetUniformLocation(shaderProgram, "uTouchUV")
+        compositeProgram = createProgram(VERTEX_SHADER, COMPOSITE_FRAGMENT_SHADER)
+        compMvpHandle = GLES30.glGetUniformLocation(compositeProgram, "uMVPMatrix")
+        compTimeHandle = GLES30.glGetUniformLocation(compositeProgram, "uTime")
+        compBaseHandle = GLES30.glGetUniformLocation(compositeProgram, "uBaseTexture")
+        compNoiseHandle = GLES30.glGetUniformLocation(compositeProgram, "uNoiseTexture")
+        compAccumHandle = GLES30.glGetUniformLocation(compositeProgram, "uAccumulationTexture")
 
-        // Pull the tragedy from the resources into the GPU.
         baseTextureId = TextureLoader.load(context, baseResId)
         noiseTextureId = TextureLoader.load(context, noiseResId)
         stencilTextureId = TextureLoader.load(context, stencilResId)
 
-        // Manifest the physical limits of the canvas.
         GLES30.glGenVertexArrays(1, vaoHandle, 0)
         GLES30.glGenBuffers(1, vboHandle, 0)
 
@@ -99,11 +107,9 @@ class ApathyRenderer(
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vboHandle[0])
         GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, geometryData.size * 4, vertexBuffer, GLES30.GL_STATIC_DRAW)
 
-        // Position Attribute (Location 0, 3 floats)
         GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, 5 * 4, 0)
         GLES30.glEnableVertexAttribArray(0)
 
-        // UV Attribute (Location 1, 2 floats)
         GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, 5 * 4, 3 * 4)
         GLES30.glEnableVertexAttribArray(1)
 
@@ -117,43 +123,81 @@ class ApathyRenderer(
         
         val ratio: Float = width.toFloat() / height.toFloat()
         Matrix.frustumM(projectionMatrix, 0, -ratio, ratio, -1f, 1f, 1f, 10f)
+
+        // Construct the FBO where the trauma accumulates
+        if (fboHandle[0] != 0) {
+            GLES30.glDeleteFramebuffers(1, fboHandle, 0)
+            GLES30.glDeleteTextures(1, accumTextureHandle, 0)
+        }
+
+        GLES30.glGenTextures(1, accumTextureHandle, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, accumTextureHandle[0])
+        GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, width, height, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_CLAMP_TO_EDGE)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_CLAMP_TO_EDGE)
+
+        GLES30.glGenFramebuffers(1, fboHandle, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboHandle[0])
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, accumTextureHandle[0], 0)
+
+        GLES30.glClearColor(0.0f, 0.0f, 0.0f, 0.0f)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
     }
 
     override fun onDrawFrame(gl: GL10?) {
-        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
-
-        GLES30.glUseProgram(shaderProgram)
-
-        val time = (SystemClock.uptimeMillis() - startTime) / 1000.0f
-        GLES30.glUniform1f(timeUniformLocation, time)
-        
-        // Feed the human intervention into the shader.
-        GLES30.glUniform2f(touchUVHandle, touchU, touchV)
-
-        // The camera stares into the void.
         Matrix.setLookAtM(viewMatrix, 0, 0f, 0f, 3f, 0f, 0f, 0f, 0f, 1.0f, 0.0f)
         Matrix.multiplyMM(vPMatrix, 0, projectionMatrix, 0, viewMatrix, 0)
-        
-        // The object exists, momentarily.
         Matrix.setIdentityM(modelMatrix, 0)
         Matrix.multiplyMM(mvpMatrix, 0, vPMatrix, 0, modelMatrix, 0)
-        
-        GLES30.glUniformMatrix4fv(mvpMatrixHandle, 1, false, mvpMatrix, 0)
 
-        // Bind the textures. Force the fragmented reality down the pipeline.
+        // PASS 1: Accumulate the Vandalism
+        if (isTouching) {
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboHandle[0])
+            
+            GLES30.glEnable(GLES30.GL_BLEND)
+            GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
+
+            GLES30.glUseProgram(stampProgram)
+            GLES30.glUniformMatrix4fv(stampMvpHandle, 1, false, mvpMatrix, 0)
+            GLES30.glUniform2f(stampTouchUVHandle, touchU, touchV)
+
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stencilTextureId)
+            GLES30.glUniform1i(stampStencilHandle, 0)
+
+            GLES30.glBindVertexArray(vaoHandle[0])
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+            
+            GLES30.glDisable(GLES30.GL_BLEND)
+            GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        }
+
+        // PASS 2: Render the Decaying Reality
+        GLES30.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+
+        GLES30.glUseProgram(compositeProgram)
+
+        val time = (SystemClock.uptimeMillis() - startTime) / 1000.0f
+        GLES30.glUniform1f(compTimeHandle, time)
+        GLES30.glUniformMatrix4fv(compMvpHandle, 1, false, mvpMatrix, 0)
+
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, baseTextureId)
-        GLES30.glUniform1i(baseTextureHandle, 0)
+        GLES30.glUniform1i(compBaseHandle, 0)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, noiseTextureId)
-        GLES30.glUniform1i(noiseTextureHandle, 1)
+        GLES30.glUniform1i(compNoiseHandle, 1)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, stencilTextureId)
-        GLES30.glUniform1i(stencilMaskHandle, 2)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, accumTextureHandle[0])
+        GLES30.glUniform1i(compAccumHandle, 2)
 
-        // Execute the brutalist geometry.
         GLES30.glBindVertexArray(vaoHandle[0])
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         GLES30.glBindVertexArray(0)
@@ -183,7 +227,6 @@ class ApathyRenderer(
             layout(location = 1) in vec2 aUV;
             
             uniform mat4 uMVPMatrix; 
-            
             out vec2 vUV;
             
             void main() {
@@ -192,40 +235,48 @@ class ApathyRenderer(
             }
         """.trimIndent()
 
-        private val FRAGMENT_SHADER = """
+        private val STAMP_FRAGMENT_SHADER = """
+            #version 300 es
+            precision highp float;
+            in vec2 vUV;
+            
+            uniform sampler2D uStencilMask;
+            uniform vec2 uTouchUV;
+            out vec4 FragColor;
+            
+            void main() {
+                vec2 stencilUV = (vUV - uTouchUV) * 3.0 + 0.5;
+                float bounds = step(0.0, stencilUV.x) * step(stencilUV.x, 1.0) * step(0.0, stencilUV.y) * step(stencilUV.y, 1.0);
+                float stencilVal = texture(uStencilMask, stencilUV).r * bounds;
+                
+                FragColor = vec4(stencilVal);
+            }
+        """.trimIndent()
+
+        private val COMPOSITE_FRAGMENT_SHADER = """
             #version 300 es
             precision highp float;
             in vec2 vUV;
             
             uniform sampler2D uBaseTexture;
             uniform sampler2D uNoiseTexture;
-            uniform sampler2D uStencilMask;
+            uniform sampler2D uAccumulationTexture;
             uniform float uTime;
-            uniform vec2 uTouchUV;
             
             out vec4 FragColor;
             
             void main() {
-                // The wall bleeds.
                 vec2 noiseUV = vUV * 5.0;
                 float noiseVal = texture(uNoiseTexture, noiseUV).r;
                 float dripFactor = noiseVal * (sin(uTime * 0.2) * 0.5 + 0.5) * 0.15;
                 vec2 distortedUV = vUV + vec2(0.0, -dripFactor);
                 
-                // Offset the stencil by the touch coordinates. 
-                // Scale by 3.0 to make it a decal rather than a full-screen inescapable truth.
-                vec2 stencilUV = (vUV - uTouchUV) * 3.0 + 0.5;
-                
-                // Hard clamp the bounds so the stencil doesn't tile into infinity.
-                float bounds = step(0.0, stencilUV.x) * step(stencilUV.x, 1.0) * step(0.0, stencilUV.y) * step(stencilUV.y, 1.0);
-                
-                float stencilVal = texture(uStencilMask, stencilUV).r * bounds;
-                float binaryCut = step(0.5, stencilVal); 
+                float accumulatedVal = texture(uAccumulationTexture, vUV).r;
+                float binaryCut = step(0.5, accumulatedVal); 
                 
                 vec4 rawColor = texture(uBaseTexture, distortedUV);
                 float luminance = dot(rawColor.rgb, vec3(0.299, 0.587, 0.114));
                 
-                // Multiply the void by the binary cut to slice out the stencil.
                 FragColor = vec4(vec3(luminance) * binaryCut, rawColor.a * binaryCut);
             }
         """.trimIndent()
