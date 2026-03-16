@@ -40,6 +40,7 @@ class ApathyRenderer(
     private var compBaseHandle: Int = 0
     private var compNoiseHandle: Int = 0
     private var compAccumHandle: Int = 0
+    private var compGravityHandle: Int = 0
 
     // Textures
     private var baseTextureId: Int = 0
@@ -57,6 +58,10 @@ class ApathyRenderer(
     @Volatile private var touchV: Float = 0.5f
     @Volatile private var touchOpacity: Float = 1.0f
     @Volatile private var isTouching: Boolean = false
+    
+    // Default to falling straight down in standard portrait mode.
+    @Volatile private var gravX: Float = 0.0f
+    @Volatile private var gravY: Float = 9.8f 
 
     private val geometryData = floatArrayOf(
         -1.0f,  1.0f, 0.0f,   0.0f, 0.0f,
@@ -82,6 +87,11 @@ class ApathyRenderer(
         isTouching = state
     }
 
+    fun setGravity(x: Float, y: Float) {
+        gravX = x
+        gravY = y
+    }
+
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES30.glEnable(GLES30.GL_CULL_FACE)
         GLES30.glCullFace(GLES30.GL_BACK)
@@ -99,6 +109,7 @@ class ApathyRenderer(
         compBaseHandle = GLES30.glGetUniformLocation(compositeProgram, "uBaseTexture")
         compNoiseHandle = GLES30.glGetUniformLocation(compositeProgram, "uNoiseTexture")
         compAccumHandle = GLES30.glGetUniformLocation(compositeProgram, "uAccumulationTexture")
+        compGravityHandle = GLES30.glGetUniformLocation(compositeProgram, "uGravity")
 
         baseTextureId = TextureLoader.load(context, baseResId)
         stencilTextureId = TextureLoader.load(context, stencilResId)
@@ -161,7 +172,6 @@ class ApathyRenderer(
         if (isTouching) {
             GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, fboHandle[0])
             
-            // Additive blending. The slower you move, the faster the values hit 1.0
             GLES30.glEnable(GLES30.GL_BLEND)
             GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
 
@@ -190,6 +200,9 @@ class ApathyRenderer(
         val time = (SystemClock.uptimeMillis() - startTime) / 1000.0f
         GLES30.glUniform1f(compTimeHandle, time)
         GLES30.glUniformMatrix4fv(compMvpHandle, 1, false, mvpMatrix, 0)
+        
+        // Pass the physical pull to the GPU
+        GLES30.glUniform2f(compGravityHandle, gravX, gravY)
 
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, baseTextureId)
@@ -255,7 +268,6 @@ class ApathyRenderer(
                 float bounds = step(0.0, stencilUV.x) * step(stencilUV.x, 1.0) * step(0.0, stencilUV.y) * step(stencilUV.y, 1.0);
                 float stencilVal = texture(uStencilMask, stencilUV).r * bounds;
                 
-                // Opacity throttles the accumulation.
                 FragColor = vec4(stencilVal * uBrushOpacity);
             }
         """.trimIndent()
@@ -269,18 +281,25 @@ class ApathyRenderer(
             uniform sampler2D uNoiseTexture;
             uniform sampler2D uAccumulationTexture;
             uniform float uTime;
+            uniform vec2 uGravity;
             
             out vec4 FragColor;
             
             void main() {
+                // Determine the direction of despair based on the physical device orientation.
+                // OpenGL UV origin is bottom-left, physical screen origin is top-left.
+                // The sensor returns negative Y when the device is upright, so we invert it.
+                // It returns positive X when tilted left, so we invert X to drag the UVs the right way.
+                vec2 gravityDir = normalize(vec2(-uGravity.x, -uGravity.y));
+                
                 vec2 noiseUV = vUV * 5.0;
                 float noiseVal = texture(uNoiseTexture, noiseUV).r;
                 float dripFactor = noiseVal * (sin(uTime * 0.2) * 0.5 + 0.5) * 0.15;
-                vec2 distortedUV = vUV + vec2(0.0, -dripFactor);
+                
+                // Distort reality along the gravity vector.
+                vec2 distortedUV = vUV + (gravityDir * dripFactor);
                 
                 float accumulatedVal = texture(uAccumulationTexture, vUV).r;
-                
-                // The threshold. If you didn't press hard enough or slow enough, it doesn't manifest.
                 float binaryCut = step(0.5, accumulatedVal); 
                 
                 vec4 rawColor = texture(uBaseTexture, distortedUV);
