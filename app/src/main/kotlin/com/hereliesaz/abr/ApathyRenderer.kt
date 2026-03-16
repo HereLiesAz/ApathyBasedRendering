@@ -14,7 +14,7 @@ import javax.microedition.khronos.opengles.GL10
 class ApathyRenderer(
     private val context: Context,
     private val baseResId: Int,
-    private val noiseResId: Int,
+    private val noiseResId: Int, // We accept this to appease the calling architecture, then violently ignore it.
     private val stencilResId: Int
 ) : GLSurfaceView.Renderer {
 
@@ -97,8 +97,10 @@ class ApathyRenderer(
         compAccumHandle = GLES30.glGetUniformLocation(compositeProgram, "uAccumulationTexture")
 
         baseTextureId = TextureLoader.load(context, baseResId)
-        noiseTextureId = TextureLoader.load(context, noiseResId)
         stencilTextureId = TextureLoader.load(context, stencilResId)
+        
+        // Sidestep the file system. Synthesize the agony in RAM.
+        noiseTextureId = TextureGenerator.generateChaos()
 
         GLES30.glGenVertexArrays(1, vaoHandle, 0)
         GLES30.glGenBuffers(1, vboHandle, 0)
@@ -124,7 +126,6 @@ class ApathyRenderer(
         val ratio: Float = width.toFloat() / height.toFloat()
         Matrix.frustumM(projectionMatrix, 0, -ratio, ratio, -1f, 1f, 1f, 10f)
 
-        // Construct the FBO where the trauma accumulates
         if (fboHandle[0] != 0) {
             GLES30.glDeleteFramebuffers(1, fboHandle, 0)
             GLES30.glDeleteTextures(1, accumTextureHandle, 0)
